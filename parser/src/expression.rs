@@ -1,12 +1,12 @@
-use super::literal::{parse_identifier, parse_number, parse_bool};
+use super::literal::{parse_identifier, parse_number, parse_bool, ident_char};
 use super::ast::{Expr, OpType, OrderType, UnaryType, Literal};
 use std::borrow::Cow;
 use nom::{
     branch::alt,
-    sequence::{delimited, separated_pair, pair},
+    sequence::{delimited, separated_pair, pair, terminated},
     bytes::complete::tag,
     character::complete::{char, space0},
-    combinator::map,
+    combinator::{map, not, peek},
     error::{FromExternalError, ParseError},
     multi::fold_many0,
     IResult,
@@ -20,12 +20,9 @@ where
 {
     let (cons, prod) = logic_and(input)?;
     fold_many0(
-        pair(tag("or"), logic_and),
+        pair(terminated(tag("or"), peek(not(ident_char))), logic_and),
         move || prod.clone(),
-        |acc, (op, e)| match op {
-           "or" => Expr::OrderExpr(OrderType::Or, Box::new(acc), Box::new(e)),
-            _  => panic!("error, unable to parse operator"),  
-        }
+        |acc, (_op, e)| Expr::OrderExpr(OrderType::Or, Box::new(acc), Box::new(e)),
     )(cons)
 }
 
@@ -35,12 +32,9 @@ where
 {
     let (cons, prod) = equality(input)?;
     fold_many0(
-        pair(tag("and"), equality),
+        pair(terminated(tag("and"), peek(not(ident_char))), equality),
         move || prod.clone(),
-        |acc, (op, e)| match op {
-           "and" => Expr::OrderExpr(OrderType::And, Box::new(acc), Box::new(e)),
-            _  => panic!("error, unable to parse operator"),  
-        }
+        |acc, (_op, e)| Expr::OrderExpr(OrderType::And, Box::new(acc), Box::new(e)),
     )(cons)
 }
 
@@ -84,7 +78,7 @@ where
 {
     let (cons, prod) = term(input)?;
     fold_many0(
-        pair(alt((tag("<="), tag(">="), tag("<"), tag(">"), tag("="))), term),
+        pair(alt((tag("<="), tag(">="), tag("<"), tag(">"))), term),
         move || prod.clone(),
         |acc, (op, e)| {
             return Expr::OrderExpr(OrderType::from(op), Box::new(acc), Box::new(e))
@@ -104,14 +98,16 @@ pub(crate) fn primary<'i, E>(input: &'i str) -> IResult<&'i str, Expr, E>
     where E: ParseError<&'i str> + FromExternalError<&'i str, ParseFloatError>
 {
     alt((
-        map(delimited(space0, parse_identifier, space0), 
-            |id: &str| Expr::Id(Cow::Borrowed(id))),
-        map(delimited(space0, parse_number, space0), 
+        map(delimited(space0, parse_number, space0),
             |num: Literal| Expr::ExprLiteral(num)),
+        // `parse_bool` must precede `parse_identifier`, otherwise `true`/`false`
+        // are swallowed as identifiers and never parse as boolean literals.
         map(delimited(space0, parse_bool, space0),
             |boolean: Literal| Expr::ExprLiteral(boolean)),
+        map(delimited(space0, parse_identifier, space0),
+            |id: &str| Expr::Id(Cow::Borrowed(id))),
         delimited(space0, parse_string, space0),
-        delimited(space0, parens, space0), 
+        delimited(space0, parens, space0),
     ))(input)
 }
 

@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 parser = { path = "../parser" }
+compiler = { path = "../compiler" }
 clap = "2.33.3"
 nom = "7.1.0"
 ptree = "0.3.2"

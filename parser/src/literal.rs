@@ -2,20 +2,26 @@ use super::ast::{Expr, Literal};
 use nom::{
     branch::alt,
     bytes::complete::{escaped_transform, tag, take_while},
-    character::complete::{char, digit1, line_ending, none_of},
+    character::complete::{char, digit1, line_ending, none_of, satisfy},
     character::{is_alphabetic, is_alphanumeric},
-    combinator::{fail, map, opt, recognize, value},
+    combinator::{fail, map, map_res, not, opt, peek, recognize, value},
     error::{FromExternalError, ParseError},
-    sequence::{delimited, tuple},
+    sequence::{delimited, terminated, tuple},
     IResult,
 };
+
+pub(crate) fn ident_char<'i, E: ParseError<&'i str>>(
+    input: &'i str,
+) -> IResult<&'i str, char, E> {
+    satisfy(|c| c.is_ascii_alphanumeric() || c == '_')(input)
+}
 
 pub(crate) fn parse_bool<'i, E: ParseError<&'i str>>(
     input: &'i str,
 ) -> IResult<&'i str, Literal, E> {
     alt((
-        value(Literal::BoolLiteral(true), tag("true")),
-        value(Literal::BoolLiteral(false), tag("false")),
+        value(Literal::BoolLiteral(true), terminated(tag("true"), peek(not(ident_char)))),
+        value(Literal::BoolLiteral(false), terminated(tag("false"), peek(not(ident_char)))),
     ))(input)
 }
 
@@ -23,7 +29,7 @@ pub(crate) fn parse_number<'i, E>(input: &'i str) -> IResult<&'i str, Literal, E
 where
     E: ParseError<&'i str> + FromExternalError<&'i str, std::num::ParseFloatError>,
 {
-    map(
+    map_res(
         recognize(tuple((
             opt(char('-')),
             digit1,
@@ -31,9 +37,10 @@ where
             opt(tuple((
                 alt((char('E'), char('e'))),
                 opt(alt((char('+'), char('-')))),
+                digit1,
             ))),
         ))),
-        |float_str: &'i str| Literal::NumLiteral(float_str.parse::<f32>().unwrap()),
+        |float_str: &'i str| float_str.parse::<f32>().map(Literal::NumLiteral),
     )(input)
 }
 
@@ -49,6 +56,7 @@ where
                 none_of("\"\\"),
                 '\\',
                 alt((
+                    value("\\", char('\\')),
                     value("", line_ending),
                     value("\t", char('t')),
                     value("\"", char('"')),

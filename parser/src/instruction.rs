@@ -1,26 +1,29 @@
 use super::ast::{Expr, Literal, OpType, OrderType, Declaration, Stmt};
-use super::expression::{expr, logic_or};
+use super::expression::expr;
 use super::literal::parse_identifier;
 use super::literal::parse_string;
 use nom::{
     branch::alt,
     bytes::complete::tag,
-    character::complete::{char, multispace0, multispace1, newline, space0, space1},
-    combinator::{eof, opt, map},
+    character::complete::{char, multispace0, multispace1, space0, space1},
+    combinator::{eof, map, opt, peek, recognize},
     error::{FromExternalError, ParseError},
     multi::{many0, separated_list0},
-    sequence::{delimited, pair, preceded, separated_pair, terminated, tuple},
+    sequence::{delimited, pair, preceded, terminated, tuple},
     IResult,
 };
 use std::borrow::Cow;
 use std::num::ParseFloatError;
-use std::ops::Deref;
 
 pub fn program<'i, E>(input: &'i str) -> IResult<&'i str, Vec<Declaration>, E>
 where
     E: ParseError<&'i str> + FromExternalError<&'i str, ParseFloatError>,
 {
     delimited(multispace0, many0(declaration),  eof)(input)
+}
+
+fn stmt_end<'i, E: ParseError<&'i str>>(input: &'i str) -> IResult<&'i str, &'i str, E> {
+    alt((multispace1, eof, recognize(peek(char('}')))))(input)
 }
 
 // Declaration parsers
@@ -52,7 +55,7 @@ pub(crate) fn var_decl<'i, E>(input: &'i str) -> IResult<&'i str, Declaration, E
                         expr))
                     )
                 ),
-                multispace1
+                stmt_end
             ),
         ),
         |(id, exp)| {
@@ -72,7 +75,7 @@ where
     E: ParseError<&'i str> + FromExternalError<&'i str, ParseFloatError>,
 {
     map(
-        alt((while_stmt, print_stmt, block, expr_stmt)),
+        alt((while_stmt, print_stmt, block, call_stmt, expr_stmt)),
         |stmt| Declaration::Statement(Box::new(stmt))
     )(input)
 }
@@ -81,7 +84,27 @@ pub(crate) fn expr_stmt<'i, E>(input: &'i str) -> IResult<&'i str, Stmt, E>
 where
     E: ParseError<&'i str> + FromExternalError<&'i str, ParseFloatError>,
 {
-    map(terminated(expr, multispace1), |exp| Stmt::ExprStmt(exp))(input)
+    map(terminated(expr, stmt_end), |exp| Stmt::ExprStmt(exp))(input)
+}
+
+pub(crate) fn call_stmt<'i, E>(input: &'i str) -> IResult<&'i str, Stmt, E>
+where
+    E: ParseError<&'i str> + FromExternalError<&'i str, ParseFloatError>,
+{
+    map(
+        terminated(
+            pair(
+                parse_identifier,
+                delimited(
+                    preceded(space0, char('(')),
+                    separated_list0(char(','), expr),
+                    preceded(space0, char(')')),
+                ),
+            ),
+            stmt_end,
+        ),
+        |(name, args)| Stmt::Call(name.into(), args),
+    )(input)
 }
 
 pub(crate) fn print_stmt<'i, E>(input: &'i str) -> IResult<&'i str, Stmt, E>
@@ -98,7 +121,7 @@ where
                     char(')'),
                 ),
             ),
-            multispace1
+            stmt_end
         ),
         |exp| Stmt::Print(exp),
     )(input)
@@ -113,19 +136,25 @@ where
             preceded(
                 tag("while"),
                 delimited(
-                    preceded(space1, char('(')),
+                    preceded(space0, char('(')),
                     delimited(space0, expr, space0),
                     char(')'),
                 )
             ),
-            multispace1)
+            multispace0)
     (input)?;
     let (input, list) = statement(input)?;
-    let ret = match &list {
-        Declaration::Statement(blk) => Stmt::While(exp, blk.to_owned()),
-        _ => panic!("unable to parse while statement {}", input)
+
+    let body = match list {
+        Declaration::Statement(blk) => blk,
+        _ => {
+            return Err(nom::Err::Error(E::from_error_kind(
+                input,
+                nom::error::ErrorKind::Verify,
+            )))
+        }
     };
-    Ok((input, ret))
+    Ok((input, Stmt::While(exp, body)))
 }
 
 pub(crate) fn block<'i, E>(input: &'i str) -> IResult<&'i str, Stmt, E>
@@ -134,28 +163,11 @@ where
 {
     map(
         tuple((
-            terminated(tag("{"), multispace1),
+            terminated(tag("{"), multispace0),
             many0(declaration),
-            terminated(tag("}"), multispace1),
+            terminated(tag("}"), stmt_end),
         )),
         |(_, decl_list, _)| Stmt::Block(decl_list)
-    )(input)
-}
-
-fn empty_params<'i, E>(input: &'i str) -> IResult<&'i str, Vec<&'i str>, E> {
-    Ok((input, vec![]))
-}
-
-fn parse_params<'i, E>(input: &'i str) -> IResult<&'i str, Vec<&'i str>, E>
-where
-    E: ParseError<&'i str>,
-{
-    map(
-        pair(
-            parse_identifier,
-            many0(preceded(tag(","), parse_identifier)),
-        ),
-        |(p, ps)| [&vec![p][..], &ps[..]].concat(),
     )(input)
 }
 
@@ -164,13 +176,13 @@ where
     E: ParseError<&'i str> + FromExternalError<&'i str, ParseFloatError>
 {
     map(
-    tuple((
+        tuple((
             space1,
             parse_identifier,
-            char('('),
-            alt((parse_params, empty_params)),
-            char(')'),
-            block,
+            preceded(space0, char('(')),
+            separated_list0(char(','), delimited(space0, parse_identifier, space0)),
+            preceded(space0, char(')')),
+            preceded(multispace0, block),
         )),
         move |(_, name, _, params, _, blck)| Declaration::FuncDecl(name.into(), params, Box::new(blck)),
     )(input)

@@ -1,8 +1,8 @@
 
-let x 
+let x = 5
 let z = "string"
 
-while (x > 1) {
+while (x > 0) {
     let y = x + 1
     print(y)
     x = x - 1
